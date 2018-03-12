@@ -33,7 +33,7 @@
 		<dependency>
 			<groupId>com.github.messenger4j</groupId>
 			<artifactId>messenger4j</artifactId>
-			<version>0.8.0</version>
+			<version>1.0.0-M3</version>
 		</dependency>
 
 		<dependency>

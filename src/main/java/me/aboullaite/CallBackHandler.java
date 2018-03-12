@@ -1,76 +1,67 @@
 package me.aboullaite;
 
-import com.github.messenger4j.MessengerPlatform;
-import com.github.messenger4j.exceptions.MessengerApiException;
-import com.github.messenger4j.exceptions.MessengerIOException;
-import com.github.messenger4j.exceptions.MessengerVerificationException;
-import com.github.messenger4j.receive.MessengerReceiveClient;
-import com.github.messenger4j.receive.events.AccountLinkingEvent;
-import com.github.messenger4j.receive.handlers.*;
+import com.github.messenger4j.Messenger;
+import com.github.messenger4j.common.WebviewHeightRatio;
+import com.github.messenger4j.exception.MessengerApiException;
+import com.github.messenger4j.exception.MessengerIOException;
+import com.github.messenger4j.exception.MessengerVerificationException;
 import com.github.messenger4j.send.*;
-import com.github.messenger4j.send.buttons.Button;
-import com.github.messenger4j.send.templates.GenericTemplate;
-import me.aboullaite.domain.SearchResult;
-import org.jsoup.Jsoup;
-import org.jsoup.nodes.Document;
-import org.jsoup.select.Elements;
+import com.github.messenger4j.send.message.TemplateMessage;
+import com.github.messenger4j.send.message.TextMessage;
+import com.github.messenger4j.send.message.quickreply.LocationQuickReply;
+import com.github.messenger4j.send.message.quickreply.QuickReply;
+import com.github.messenger4j.send.message.quickreply.TextQuickReply;
+import com.github.messenger4j.send.message.template.ButtonTemplate;
+import com.github.messenger4j.send.message.template.button.Button;
+import com.github.messenger4j.send.message.template.button.PostbackButton;
+import com.github.messenger4j.send.message.template.button.UrlButton;
+import com.github.messenger4j.send.recipient.IdRecipient;
+import com.github.messenger4j.send.recipient.Recipient;
+import com.github.messenger4j.send.senderaction.SenderAction;
+import com.github.messenger4j.webhook.event.QuickReplyMessageEvent;
+import com.github.messenger4j.webhook.event.TextMessageEvent;
+import me.aboullaite.domain.QuickReplyType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.io.IOException;
+import java.net.URL;
+import java.time.Instant;
+import java.util.Arrays;
 import java.util.List;
-import java.util.Date;
-import java.util.stream.Collectors;
-
-/**
- * Created by aboullaite on 2017-02-26.
- */
+import java.util.Optional;
 
 @RestController
-@RequestMapping("/callback")
+@RequestMapping("/")
 public class CallBackHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(CallBackHandler.class);
 
-    private static final String RESOURCE_URL =
-            "https://raw.githubusercontent.com/fbsamples/messenger-platform-samples/master/node/public";
-    public static final String GOOD_ACTION = "DEVELOPER_DEFINED_PAYLOAD_FOR_GOOD_ACTION";
-    public static final String NOT_GOOD_ACTION = "DEVELOPER_DEFINED_PAYLOAD_FOR_NOT_GOOD_ACTION";
+    private final Messenger sendClient;
 
-    private final MessengerReceiveClient receiveClient;
-    private final MessengerSendClient sendClient;
-
-    /**
-     * Constructs the {@code CallBackHandler} and initializes the {@code MessengerReceiveClient}.
-     *
-     * @param appSecret   the {@code Application Secret}
-     * @param verifyToken the {@code Verification Token} that has been provided by you during the setup of the {@code
-     *                    Webhook}
-     * @param sendClient  the initialized {@code MessengerSendClient}
-     */
     @Autowired
-    public CallBackHandler(@Value("${messenger4j.appSecret}") final String appSecret,
-                                            @Value("${messenger4j.verifyToken}") final String verifyToken,
-                                            final MessengerSendClient sendClient) {
+    public CallBackHandler(final Messenger messenger) {
 
-        logger.debug("Initializing MessengerReceiveClient - appSecret: {} | verifyToken: {}", appSecret, verifyToken);
-        this.receiveClient = MessengerPlatform.newReceiveClientBuilder(appSecret, verifyToken)
-                .onTextMessageEvent(newTextMessageEventHandler())
-                .onQuickReplyMessageEvent(newQuickReplyMessageEventHandler())
-                .onPostbackEvent(newPostbackEventHandler())
-                .onAccountLinkingEvent(newAccountLinkingEventHandler())
-                .onOptInEvent(newOptInEventHandler())
-                .onEchoMessageEvent(newEchoMessageEventHandler())
-                .onMessageDeliveredEvent(newMessageDeliveredEventHandler())
-                .onMessageReadEvent(newMessageReadEventHandler())
-                .fallbackEventHandler(newFallbackEventHandler())
-                .build();
-        this.sendClient = sendClient;
+        this.sendClient = messenger;
+        logger.debug("Initializing CallBackHandler");
+
+//        sendClient.onReceiveEvents();
+
+//        this.receiveClient = MessengerPlatform.newReceiveClientBuilder(appSecret, verifyToken)
+//                .onTextMessageEvent(newTextMessageEventHandler())
+//                .onQuickReplyMessageEvent(newQuickReplyMessageEventHandler())
+//                .onPostbackEvent(newPostbackEventHandler())
+//                .onAccountLinkingEvent(newAccountLinkingEventHandler())
+//                .onOptInEvent(newOptInEventHandler())
+//                .onEchoMessageEvent(newEchoMessageEventHandler())
+//                .onMessageDeliveredEvent(newMessageDeliveredEventHandler())
+//                .onMessageReadEvent(newMessageReadEventHandler())
+//                .fallbackEventHandler(newFallbackEventHandler())
+//                .build();
+//        this.sendClient = sendClient;
     }
 
     /**
@@ -87,7 +78,8 @@ public class CallBackHandler {
         logger.debug("Received Webhook verification request - mode: {} | verifyToken: {} | challenge: {}", mode,
                 verifyToken, challenge);
         try {
-            return ResponseEntity.ok(this.receiveClient.verifyWebhook(mode, verifyToken, challenge));
+            this.sendClient.verifyWebhook(mode, verifyToken);
+            return ResponseEntity.ok(challenge);
         } catch (MessengerVerificationException e) {
             logger.warn("Webhook verification failed: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body(e.getMessage());
@@ -103,7 +95,25 @@ public class CallBackHandler {
 
         logger.debug("Received Messenger Platform callback - payload: {} | signature: {}", payload, signature);
         try {
-            this.receiveClient.processCallbackPayload(payload, signature);
+            sendClient.onReceiveEvents(payload, Optional.ofNullable(signature), event -> {
+                final String senderId = event.senderId();
+                final Instant timestamp = event.timestamp();
+
+                if (event.isTextMessageEvent()) {
+                    final TextMessageEvent textMessageEvent = event.asTextMessageEvent();
+                    final String messageId = textMessageEvent.messageId();
+                    final String text = textMessageEvent.text();
+
+                    logger.debug("Received text message from '{}' at '{}' with content: {} (mid: {})",
+                            senderId, timestamp, text, messageId);
+
+                    processTextMessage(messageId, text, senderId, event.timestamp());
+                } else if (event.isQuickReplyMessageEvent()) {
+                    QuickReplyMessageEvent quickReplyEvent = event.asQuickReplyMessageEvent();
+                    quickReplyMessageHandler(quickReplyEvent.senderId(), quickReplyEvent.payload());
+                }
+            });
+
             logger.debug("Processed callback payload successfully");
             return ResponseEntity.status(HttpStatus.OK).build();
         } catch (MessengerVerificationException e) {
@@ -112,269 +122,253 @@ public class CallBackHandler {
         }
     }
 
-    private TextMessageEventHandler newTextMessageEventHandler() {
-        return event -> {
-            logger.debug("Received TextMessageEvent: {}", event);
-
-            final String messageId = event.getMid();
-            final String messageText = event.getText();
-            final String senderId = event.getSender().getId();
-            final Date timestamp = event.getTimestamp();
-
-            logger.info("Received message '{}' with text '{}' from user '{}' at '{}'",
-                    messageId, messageText, senderId, timestamp);
-
-            try {
-                switch (messageText.toLowerCase()) {
-
-
-                    case "yo":
-                        sendTextMessage(senderId, "Hello, What I can do for you ? Type the word you're looking for");
-                        break;
-
-                    case "great":
-                        sendTextMessage(senderId, "You're welcome :) keep rocking");
-                        break;
-
-
-                    default:
-                        sendReadReceipt(senderId);
-                        sendTypingOn(senderId);
-                        sendSpringDoc(senderId, messageText);
-                        sendQuickReply(senderId);
-                        sendTypingOff(senderId);
-                }
-            } catch (MessengerApiException | MessengerIOException e) {
-                handleSendException(e);
-            } catch (IOException e) {
-                handleIOException(e);
+    private void processTextMessage(final String messageId,   final String messageText,   final String senderId,   final Instant timestamp) {
+        logger.info("Received message '{}' with text '{}' from user '{}' at '{}'", messageId, messageText, senderId, timestamp);
+        try {
+            switch (messageText.toLowerCase()) {
+                case "მადლობა":
+                    sendTextMessage(senderId, "მადლობა დაინტერესებისთვის <3");
+                    break;
+                case "madloba":
+                    sendTextMessage(senderId, "არაფერს #წერექართულად");
+                    break;
+                default:
+                    sendAction(senderId, SenderAction.MARK_SEEN);
+                    sendAction(senderId, SenderAction.TYPING_ON);
+                    sendQuickReply(senderId);
+                    sendButtonTemplate(senderId);
+                    sendAction(senderId, SenderAction.TYPING_OFF);
             }
-        };
+        } catch (Exception e) {
+            handleSendException(e);
+        }
     }
 
-    private void sendSpringDoc(String recipientId, String keyword) throws MessengerApiException, MessengerIOException, IOException {
+    private void sendButtonTemplate(String recipientId) throws  Exception {
+        UrlButton buttonA = UrlButton.create("Show Website", new URL("http://example.com"));
+        PostbackButton buttonB = PostbackButton.create("Start Chatting", "USER_DEFINED_PAYLOAD");
+        UrlButton buttonC = UrlButton.create("Show Website", new URL("https://petersapparel.parseapp.com"),
+                Optional.of(WebviewHeightRatio.FULL), Optional.of(true), Optional.of(new URL("https://petersfancyapparel.com/fallback")), Optional.empty());
 
-        Document doc = Jsoup.connect(("https://spring.io/search?q=").concat(keyword)).get();
-        String countResult = doc.select("div.search-results--count").first().ownText();
-        Elements searchResult = doc.select("section.search-result");
-        List<SearchResult> searchResults = searchResult.stream().map(element ->
-                        new SearchResult(element.select("a").first().ownText(),
-                element.select("a").first().absUrl("href"),
-                element.select("div.search-result--subtitle").first().ownText(),
-                element.select("div.search-result--summary").first().ownText())
-                ).limit(3).collect(Collectors.toList());
+        final List<Button> buttons = Arrays.asList(buttonA, buttonB, buttonC);
+        final ButtonTemplate buttonTemplate = ButtonTemplate.create("What do you want to do next?", buttons);
 
-        final List<Button> firstLink = Button.newListBuilder()
-                .addUrlButton("Open Link", searchResults.get(0).getLink()).toList()
-                .build();
-final List<Button> secondLink = Button.newListBuilder()
-                .addUrlButton("Open Link", searchResults.get(1).getLink()).toList()
-                .build();
-final List<Button> thirdtLink = Button.newListBuilder()
-                .addUrlButton("Open Link", searchResults.get(2).getLink()).toList()
-                .build();
-final List<Button> searchLink = Button.newListBuilder()
-                .addUrlButton("Open Link", ("https://spring.io/search?q=").concat(keyword)).toList()
-                .build();
+        final TemplateMessage templateMessage = TemplateMessage.create(buttonTemplate);
+        final MessagePayload payload = MessagePayload.create(recipientId, MessagingType.RESPONSE,
+                templateMessage);
 
-
-
-        final GenericTemplate genericTemplate = GenericTemplate.newBuilder()
-                .addElements()
-                .addElement(searchResults.get(0).getTitle())
-                .subtitle(searchResults.get(0).getSubtitle())
-                .itemUrl(searchResults.get(0).getLink())
-                .imageUrl("https://upload.wikimedia.org/wikipedia/en/2/20/Pivotal_Java_Spring_Logo.png")
-                .buttons(firstLink)
-                .toList()
-                .addElement(searchResults.get(1).getTitle())
-                .subtitle(searchResults.get(1).getSubtitle())
-                .itemUrl(searchResults.get(1).getLink())
-                .imageUrl("https://upload.wikimedia.org/wikipedia/en/2/20/Pivotal_Java_Spring_Logo.png")
-                .buttons(secondLink)
-                .toList()
-                .addElement(searchResults.get(2).getTitle())
-                .subtitle(searchResults.get(2).getSubtitle())
-                .itemUrl(searchResults.get(2).getLink())
-                .imageUrl("https://upload.wikimedia.org/wikipedia/en/2/20/Pivotal_Java_Spring_Logo.png")
-                .buttons(thirdtLink)
-                .toList()
-                .addElement("All results " + countResult)
-                .subtitle("Spring Search Result")
-                .itemUrl(("https://spring.io/search?q=").concat(keyword))
-                .imageUrl("https://upload.wikimedia.org/wikipedia/en/2/20/Pivotal_Java_Spring_Logo.png")
-                .buttons(searchLink)
-                .toList()
-                .done()
-                .build();
-
-        this.sendClient.sendTemplate(recipientId, genericTemplate);
+        sendClient.send(payload);
     }
 
-    private void sendGifMessage(String recipientId, String gif) throws MessengerApiException, MessengerIOException {
-        this.sendClient.sendImageAttachment(recipientId, gif);
+    private void sendOptions(String recipientId) {
+
+//        final List<Button> firstLink = Button.newListBuilder()
+//                .addUrlButton("შოპი", "www.example.com").toList()
+//                .build();
+//
+//        final GenericTemplate genericTemplate = GenericTemplate.newBuilder()
+//                .addElements()
+//                .addElement("რა ხირს?")
+//                .buttons(firstLink)
+//                .toList()
+//                .addElement("მაღაზია სად გაქვთ?")
+//                .subtitle("სად მოვიდე?")
+//                .itemUrl("https://goo.gl/y1uFAL")
+//                .buttons(firstLink)
+//                .toList()
+//                .done()
+//                .build();
+//
+//        try {
+//            this.sendClient.sendTemplate(recipientId, genericTemplate);
+//        } catch (MessengerApiException e) {
+//            e.printStackTrace();
+//        } catch (MessengerIOException e) {
+//            e.printStackTrace();
+//        }
+//        try {
+//            final UrlButton buttonA = UrlButton.create("Show Website", new URL("https://petersapparel.parseapp.com"));
+//            final PostbackButton buttonB = PostbackButton.create("Start Chatting", "USER_DEFINED_PAYLOAD");
+//            final UrlButton buttonC = UrlButton.create("Show Website", new URL("https://petersapparel.parseapp.com"),
+//                    WebviewHeightRatio.FULL, true, new URL("https://petersfancyapparel.com/fallback"), null);
+//
+//            final List<Button> buttons = Arrays.asList(buttonA, buttonB, buttonC);
+//            final ButtonTemplate buttonTemplate = ButtonTemplate.create("What do you want to do next?", buttons);
+//
+//            final TemplateMessage templateMessage = TemplateMessage.create(buttonTemplate);
+//            final MessagePayload payload = MessagePayload.create(recipientId, MessagingType.RESPONSE,
+//                    templateMessage);
+//
+//            sendClient.send(payload);
+//        } catch (Exception e) {
+//            e.printStackTrace();
+//        }
     }
 
+//    private void sendGifMessage(String recipientId, String gif) throws MessengerApiException, MessengerIOException {
+//        this.sendClient.sendImageAttachment(recipientId, gif);
+//    }
 
 
-    private void sendQuickReply(String recipientId) throws MessengerApiException, MessengerIOException {
-        final List<QuickReply> quickReplies = QuickReply.newListBuilder()
-                .addTextQuickReply("Looks good", GOOD_ACTION).toList()
-                .addTextQuickReply("Nope!", NOT_GOOD_ACTION).toList()
-                .build();
 
-        this.sendClient.sendTextMessage(recipientId, "Was this helpful?!", quickReplies);
+    private void sendQuickReply(String recipientId) throws Exception {
+        final IdRecipient recipient = IdRecipient.create(recipientId);
+
+        final String text = "გთხოვთ აირჩიოთ თქვენთვის სასურველი კითხვა";
+
+        final TextQuickReply quickReplyA = TextQuickReply.create("მაღაზია",
+                QuickReplyType.SHOP.toString(), Optional.of(new URL("http://example.com/img/red.png")));
+        final LocationQuickReply quickReplyB = LocationQuickReply.create();
+        final TextQuickReply quickReplyC = TextQuickReply.create("რა ხირს?", QuickReplyType.PRICE.toString());
+
+        final List<QuickReply> quickReplies = Arrays.asList(quickReplyA, quickReplyB, quickReplyC);
+
+        final TextMessage message = TextMessage.create(text, Optional.of(quickReplies), Optional.empty());
+        final MessagePayload payload = MessagePayload.create(recipient, MessagingType.RESPONSE, message);
+
+        sendClient.send(payload);
+
+
+//        final List<QuickReply> quickReplies = QuickReply.newListBuilder()
+//                .addTextQuickReply("რა ხირს?", PRICE).toList()
+//                .addTextQuickReply("როგორ ვიყიდო?", LOCATION).toList()
+//                .addTextQuickReply("სად გაქვთ მაღაზია?", SHOP).toList()
+//                .build();
+
+//        this.sendClient.sendTextMessage(recipientId, "გთხოვთ აირჩიოთ თქვენთვის სასურველი კითხვა", quickReplies);
     }
 
-    private void sendReadReceipt(String recipientId) throws MessengerApiException, MessengerIOException {
-        this.sendClient.sendSenderAction(recipientId, SenderAction.MARK_SEEN);
+    private void sendAction(String recipientId, SenderAction action) throws MessengerApiException, MessengerIOException {
+        sendClient.send(SenderActionPayload.create(recipientId, action));
     }
 
-    private void sendTypingOn(String recipientId) throws MessengerApiException, MessengerIOException {
-        this.sendClient.sendSenderAction(recipientId, SenderAction.TYPING_ON);
+    private void quickReplyMessageHandler(String senderId, String quickReplyPayload) {
+        QuickReplyType replyType = QuickReplyType.valueOf(quickReplyPayload);
+        if(replyType == QuickReplyType.PRICE) {
+            sendTextMessage(senderId, "30 გელა");
+        } else if (replyType == QuickReplyType.SHOP) {
+            sendTextMessage(senderId, "არ გვაქვს მაღაზია ბლა ბლა ბლა");
+        } else if (replyType == QuickReplyType.LOCATION) {
+            sendTextMessage(senderId, "ჭავჭავაძეზე მოდი ბრატ");
+        }
+        try {
+            sendQuickReply(senderId);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
     }
 
-    private void sendTypingOff(String recipientId) throws MessengerApiException, MessengerIOException {
-        this.sendClient.sendSenderAction(recipientId, SenderAction.TYPING_OFF);
-    }
+//    private PostbackEventHandler newPostbackEventHandler() {
+//        return event -> {
+//            logger.debug("Received PostbackEvent: {}", event);
+//
+//            final String senderId = event.getSender().getId();
+//            final String recipientId = event.getRecipient().getId();
+//            final String payload = event.getPayload();
+//            final Date timestamp = event.getTimestamp();
+//
+//            logger.info("Received postback for user '{}' and page '{}' with payload '{}' at '{}'",
+//                    senderId, recipientId, payload, timestamp);
+//
+//            sendTextMessage(senderId, "Postback called");
+//        };
+//    }
 
-    private QuickReplyMessageEventHandler newQuickReplyMessageEventHandler() {
-        return event -> {
-            logger.debug("Received QuickReplyMessageEvent: {}", event);
+//    private AccountLinkingEventHandler newAccountLinkingEventHandler() {
+//        return event -> {
+//            logger.debug("Received AccountLinkingEvent: {}", event);
+//
+//            final String senderId = event.getSender().getId();
+//            final AccountLinkingEvent.AccountLinkingStatus accountLinkingStatus = event.getStatus();
+//            final String authorizationCode = event.getAuthorizationCode();
+//
+//            logger.info("Received account linking event for user '{}' with status '{}' and auth code '{}'",
+//                    senderId, accountLinkingStatus, authorizationCode);
+//        };
+//    }
 
-            final String senderId = event.getSender().getId();
-            final String messageId = event.getMid();
-            final String quickReplyPayload = event.getQuickReply().getPayload();
+//    private OptInEventHandler newOptInEventHandler() {
+//        return event -> {
+//            logger.debug("Received OptInEvent: {}", event);
+//
+//            final String senderId = event.getSender().getId();
+//            final String recipientId = event.getRecipient().getId();
+//            final String passThroughParam = event.getRef();
+//            final Date timestamp = event.getTimestamp();
+//
+//            logger.info("Received authentication for user '{}' and page '{}' with pass through param '{}' at '{}'",
+//                    senderId, recipientId, passThroughParam, timestamp);
+//
+//            sendTextMessage(senderId, "Authentication successful");
+//        };
+//    }
 
-            logger.info("Received quick reply for message '{}' with payload '{}'", messageId, quickReplyPayload);
+//    private EchoMessageEventHandler newEchoMessageEventHandler() {
+//        return event -> {
+//            logger.debug("Received EchoMessageEvent: {}", event);
+//
+//            final String messageId = event.getMid();
+//            final String recipientId = event.getRecipient().getId();
+//            final String senderId = event.getSender().getId();
+//            final Date timestamp = event.getTimestamp();
+//
+//            logger.info("Received echo for message '{}' that has been sent to recipient '{}' by sender '{}' at '{}'",
+//                    messageId, recipientId, senderId, timestamp);
+//        };
+//    }
 
+//    private MessageDeliveredEventHandler newMessageDeliveredEventHandler() {
+//        return event -> {
+//            logger.debug("Received MessageDeliveredEvent: {}", event);
+//
+//            final List<String> messageIds = event.getMids();
+//            final Date watermark = event.getWatermark();
+//            final String senderId = event.getSender().getId();
+//
+//            if (messageIds != null) {
+//                messageIds.forEach(messageId -> {
+//                    logger.info("Received delivery confirmation for message '{}'", messageId);
+//                });
+//            }
+//
+//            logger.info("All messages before '{}' were delivered to user '{}'", watermark, senderId);
+//        };
+//    }
 
-                try {
-                    if(quickReplyPayload.equals(GOOD_ACTION))
-                    sendGifMessage(senderId, "https://media.giphy.com/media/3oz8xPxTUeebQ8pL1e/giphy.gif");
-                    else
-                    sendGifMessage(senderId, "https://media.giphy.com/media/26ybx7nkZXtBkEYko/giphy.gif");
-                } catch (MessengerApiException e) {
-                    handleSendException(e);
-                } catch (MessengerIOException e) {
-                    handleIOException(e);
-                }
-
-            sendTextMessage(senderId, "Let's try another one :D!");
-        };
-    }
-
-    private PostbackEventHandler newPostbackEventHandler() {
-        return event -> {
-            logger.debug("Received PostbackEvent: {}", event);
-
-            final String senderId = event.getSender().getId();
-            final String recipientId = event.getRecipient().getId();
-            final String payload = event.getPayload();
-            final Date timestamp = event.getTimestamp();
-
-            logger.info("Received postback for user '{}' and page '{}' with payload '{}' at '{}'",
-                    senderId, recipientId, payload, timestamp);
-
-            sendTextMessage(senderId, "Postback called");
-        };
-    }
-
-    private AccountLinkingEventHandler newAccountLinkingEventHandler() {
-        return event -> {
-            logger.debug("Received AccountLinkingEvent: {}", event);
-
-            final String senderId = event.getSender().getId();
-            final AccountLinkingEvent.AccountLinkingStatus accountLinkingStatus = event.getStatus();
-            final String authorizationCode = event.getAuthorizationCode();
-
-            logger.info("Received account linking event for user '{}' with status '{}' and auth code '{}'",
-                    senderId, accountLinkingStatus, authorizationCode);
-        };
-    }
-
-    private OptInEventHandler newOptInEventHandler() {
-        return event -> {
-            logger.debug("Received OptInEvent: {}", event);
-
-            final String senderId = event.getSender().getId();
-            final String recipientId = event.getRecipient().getId();
-            final String passThroughParam = event.getRef();
-            final Date timestamp = event.getTimestamp();
-
-            logger.info("Received authentication for user '{}' and page '{}' with pass through param '{}' at '{}'",
-                    senderId, recipientId, passThroughParam, timestamp);
-
-            sendTextMessage(senderId, "Authentication successful");
-        };
-    }
-
-    private EchoMessageEventHandler newEchoMessageEventHandler() {
-        return event -> {
-            logger.debug("Received EchoMessageEvent: {}", event);
-
-            final String messageId = event.getMid();
-            final String recipientId = event.getRecipient().getId();
-            final String senderId = event.getSender().getId();
-            final Date timestamp = event.getTimestamp();
-
-            logger.info("Received echo for message '{}' that has been sent to recipient '{}' by sender '{}' at '{}'",
-                    messageId, recipientId, senderId, timestamp);
-        };
-    }
-
-    private MessageDeliveredEventHandler newMessageDeliveredEventHandler() {
-        return event -> {
-            logger.debug("Received MessageDeliveredEvent: {}", event);
-
-            final List<String> messageIds = event.getMids();
-            final Date watermark = event.getWatermark();
-            final String senderId = event.getSender().getId();
-
-            if (messageIds != null) {
-                messageIds.forEach(messageId -> {
-                    logger.info("Received delivery confirmation for message '{}'", messageId);
-                });
-            }
-
-            logger.info("All messages before '{}' were delivered to user '{}'", watermark, senderId);
-        };
-    }
-
-    private MessageReadEventHandler newMessageReadEventHandler() {
-        return event -> {
-            logger.debug("Received MessageReadEvent: {}", event);
-
-            final Date watermark = event.getWatermark();
-            final String senderId = event.getSender().getId();
-
-            logger.info("All messages before '{}' were read by user '{}'", watermark, senderId);
-        };
-    }
+//    private MessageReadEventHandler newMessageReadEventHandler() {
+//        return event -> {
+//            logger.debug("Received MessageReadEvent: {}", event);
+//
+//            final Date watermark = event.getWatermark();
+//            final String senderId = event.getSender().getId();
+//
+//            logger.info("All messages before '{}' were read by user '{}'", watermark, senderId);
+//        };
+//    }
 
     /**
      * This handler is called when either the message is unsupported or when the event handler for the actual event type
      * is not registered. In this showcase all event handlers are registered. Hence only in case of an
      * unsupported message the fallback event handler is called.
      */
-    private FallbackEventHandler newFallbackEventHandler() {
-        return event -> {
-            logger.debug("Received FallbackEvent: {}", event);
-
-            final String senderId = event.getSender().getId();
-            logger.info("Received unsupported message from user '{}'", senderId);
-        };
-    }
+//    private void newFallbackEventHandler() {
+//        return event -> {
+//            logger.debug("Received FallbackEvent: {}", event);
+//
+//            final String senderId = event.getSender().getId();
+//            logger.info("Received unsupported message from user '{}'", senderId);
+//        };
+//    }
 
     private void sendTextMessage(String recipientId, String text) {
         try {
-            final Recipient recipient = Recipient.newBuilder().recipientId(recipientId).build();
-            final NotificationType notificationType = NotificationType.REGULAR;
-            final String metadata = "DEVELOPER_DEFINED_METADATA";
+            final MessagePayload payload = MessagePayload.create(recipientId,
+                    MessagingType.RESPONSE, TextMessage.create(text));
 
-            this.sendClient.sendTextMessage(recipient, notificationType, text, metadata);
-        } catch (MessengerApiException | MessengerIOException e) {
-            handleSendException(e);
+            sendClient.send(payload);
+        } catch (Exception e) {
+            e.printStackTrace();
         }
     }
 

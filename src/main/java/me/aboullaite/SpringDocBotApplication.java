@@ -1,7 +1,6 @@
 package me.aboullaite;
 
-import com.github.messenger4j.MessengerPlatform;
-import com.github.messenger4j.send.MessengerSendClient;
+import com.github.messenger4j.Messenger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -20,9 +19,10 @@ public class SpringDocBotApplication {
 	 * @param pageAccessToken the generated {@code Page Access Token}
 	 */
 	@Bean
-	public MessengerSendClient messengerSendClient(@Value("${messenger4j.pageAccessToken}") String pageAccessToken) {
+	public Messenger messengerSendClient(@Value("${messenger4j.pageAccessToken}") String pageAccessToken, @Value("${messenger4j.appSecret}") String appSecret,
+										 @Value("${messenger4j.verifyToken}") String verifyToken) {
 		logger.debug("Initializing MessengerSendClient - pageAccessToken: {}", pageAccessToken);
-		return MessengerPlatform.newSendClientBuilder(pageAccessToken).build();
+		return Messenger.create(pageAccessToken, appSecret, verifyToken);
 	}
 
 	public static void main(String[] args) {
